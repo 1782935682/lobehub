@@ -35,6 +35,7 @@ const TOPIC_STALE_THRESHOLD = 4 * 60 * 60 * 1000; // 4 hours
 // PostgreSQL error code for foreign key constraint violations.
 // See: https://www.postgresql.org/docs/current/errcodes-appendix.html
 const PG_FOREIGN_KEY_VIOLATION = '23503';
+const TOPIC_ID_FK_KEYWORD = 'topic_id';
 
 // Status emoji added on receive, removed on complete
 const RECEIVED_EMOJI = emoji.eyes;
@@ -63,6 +64,19 @@ function extractErrorMessage(err: unknown): string {
   if (typeof e.body?.message === 'string') return e.body.message;
 
   return JSON.stringify(err);
+}
+
+function isTopicForeignKeyViolation(error: unknown): boolean {
+  const err = error as Record<string, any> | undefined;
+  if (!err) return false;
+
+  const code = err.code || err.cause?.code;
+  if (code !== PG_FOREIGN_KEY_VIOLATION) return false;
+
+  const constraint = String(err.constraint || err.cause?.constraint || '').toLowerCase();
+  if (!constraint) return true;
+
+  return constraint.includes(TOPIC_ID_FK_KEYWORD);
 }
 
 /**
@@ -415,9 +429,7 @@ export class AgentBridgeService {
     } catch (error) {
       // If the cached topicId references a deleted topic (FK violation),
       // clear thread state and retry as a fresh mention instead of surfacing the DB error.
-      const cause = (error as any)?.cause;
-      const isFKViolation =
-        cause?.code === PG_FOREIGN_KEY_VIOLATION && cause?.constraint?.includes('topic_id');
+      const isFKViolation = isTopicForeignKeyViolation(error);
       const errMsg = error instanceof Error ? error.message : String(error);
       if (isFKViolation) {
         log(
@@ -627,8 +639,9 @@ export class AgentBridgeService {
     } catch (error) {
       log('executeWithCallback[queue]: execAgent failed: %O', error);
 
-      const errMsg = error instanceof Error ? error.message : String(error);
-      if (errMsg.includes('Failed query') && errMsg.includes('topic_id')) {
+      // Rethrow FK violation errors (e.g. stale topic_id) so that callers like
+      // handleSubscribedMessage can detect and recover (reset thread state).
+      if (isTopicForeignKeyViolation(error)) {
         throw error;
       }
 

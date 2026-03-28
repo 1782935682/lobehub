@@ -381,6 +381,22 @@ export class AiAgentService {
     // 3. Handle topic creation: if no topicId provided, create a new topic; otherwise reuse existing
     let topicId = appContext?.topicId;
     const topicBoundDeviceId = requestedDeviceId;
+    // If topicId is provided, validate it belongs to current user + current agent first.
+    if (topicId) {
+      const topic = await this.topicModel.findById(topicId);
+      const isTopicOwnedByCurrentAgent = topic?.agentId === resolvedAgentId;
+      if (!topic || !isTopicOwnedByCurrentAgent) {
+        log(
+          'execAgent: topicId=%s is invalid for agent=%s, will create a new topic (found=%s, topicAgentId=%s)',
+          topicId,
+          resolvedAgentId,
+          !!topic,
+          topic?.agentId || 'null',
+        );
+        topicId = undefined;
+      }
+    }
+
     if (!topicId) {
       if (resume) {
         throw new Error('Resume mode requires the parent message to belong to a topic');

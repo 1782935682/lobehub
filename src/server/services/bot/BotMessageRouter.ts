@@ -23,6 +23,7 @@ import {
 } from './platforms';
 
 const log = debug('lobe-server:bot:message-router');
+const DUPLICATE_MESSAGE_TTL_MS = 60_000;
 
 interface ResolvedAgentInfo {
   agentId: string;
@@ -69,6 +70,8 @@ export class BotMessageRouter {
 
   /** Per-key init promises to avoid duplicate concurrent loading */
   private loadingPromises = new Map<string, Promise<RegisteredBot | null>>();
+  /** De-duplicate cross-event duplicate deliveries for the same inbound message */
+  private processedMessageMap = new Map<string, number>();
 
   // ------------------------------------------------------------------
   // Public API
@@ -392,7 +395,28 @@ export class BotMessageRouter {
       return true;
     };
 
+    const shouldSkipDuplicate = (threadId: string, messageId: string | undefined): boolean => {
+      if (!messageId) return false;
+
+      const now = Date.now();
+      for (const [key, ts] of this.processedMessageMap.entries()) {
+        if (now - ts > DUPLICATE_MESSAGE_TTL_MS) {
+          this.processedMessageMap.delete(key);
+        }
+      }
+
+      const messageKey = `${platform}:${applicationId}:${threadId}:${messageId}`;
+      if (this.processedMessageMap.has(messageKey)) {
+        log('skip duplicated inbound message: %s', messageKey);
+        return true;
+      }
+
+      this.processedMessageMap.set(messageKey, now);
+      return false;
+    };
+
     bot.onNewMention(async (thread, message, context?: MessageContext) => {
+      if (shouldSkipDuplicate(thread.id, message.id)) return;
       if (await tryDispatch(thread, message.text)) return;
 
       const merged = BotMessageRouter.mergeSkippedMessages(message, context);
@@ -415,6 +439,7 @@ export class BotMessageRouter {
     });
 
     bot.onSubscribedMessage(async (thread, message, context?: MessageContext) => {
+      if (shouldSkipDuplicate(thread.id, message.id)) return;
       if (message.author.isBot === true) return;
       if (await tryDispatch(thread, message.text)) return;
 
@@ -446,6 +471,7 @@ export class BotMessageRouter {
     const dmEnabled = info.settings?.dm?.enabled ?? platform === 'wechat';
     if (dmEnabled) {
       bot.onNewMessage(/./, async (thread, message, context?: MessageContext) => {
+        if (shouldSkipDuplicate(thread.id, message.id)) return;
         if (message.author.isBot === true) return;
 
         // Skip text-based slash commands — already handled by registerCommands

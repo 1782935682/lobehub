@@ -38,6 +38,8 @@ const mockOnNewMention = vi.hoisted(() => vi.fn());
 const mockOnSubscribedMessage = vi.hoisted(() => vi.fn());
 const mockOnNewMessage = vi.hoisted(() => vi.fn());
 const mockOnSlashCommand = vi.hoisted(() => vi.fn());
+const mockHandleMention = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockHandleSubscribedMessage = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock('chat', () => ({
   BaseFormatConverter: class {},
@@ -60,8 +62,8 @@ vi.mock('@/server/services/aiAgent', () => ({
 
 vi.mock('../AgentBridgeService', () => ({
   AgentBridgeService: vi.fn().mockImplementation(() => ({
-    handleMention: vi.fn().mockResolvedValue(undefined),
-    handleSubscribedMessage: vi.fn().mockResolvedValue(undefined),
+    handleMention: mockHandleMention,
+    handleSubscribedMessage: mockHandleSubscribedMessage,
   })),
 }));
 
@@ -288,6 +290,42 @@ describe('BotMessageRouter', () => {
 
       // Called twice: once for text-based slash commands, once for DM catch-all
       expect(mockOnNewMessage).toHaveBeenCalledTimes(2);
+    });
+
+    it('should dedupe same message across subscribed and dm handlers', async () => {
+      mockFindEnabledByPlatform.mockResolvedValue([
+        makeProvider({
+          applicationId: 'wechat-app-123',
+          platform: 'wechat',
+          settings: {},
+        }),
+      ]);
+
+      const router = new BotMessageRouter();
+      const handler = router.getWebhookHandler('wechat', 'wechat-app-123');
+      const req = new Request('https://example.com/webhook', { body: '{}', method: 'POST' });
+      await handler(req);
+
+      const subscribedHandler = mockOnSubscribedMessage.mock.calls[0]?.[0];
+      const dmHandler = mockOnNewMessage.mock.calls[1]?.[1];
+
+      const thread = {
+        id: 'wechat:single:thread-1',
+        post: vi.fn(),
+        setState: vi.fn(),
+      } as any;
+
+      const message = {
+        author: { isBot: false, userName: 'u1' },
+        id: 'm-1',
+        text: 'hello',
+      } as any;
+
+      await subscribedHandler(thread, message);
+      await dmHandler(thread, message);
+
+      expect(mockHandleSubscribedMessage).toHaveBeenCalledTimes(1);
+      expect(mockHandleMention).toHaveBeenCalledTimes(0);
     });
   });
 });
