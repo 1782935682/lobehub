@@ -597,10 +597,11 @@ export class AiAgentService {
 
       log('execAgent: enabled tool ids: %O', toolsResult.enabledToolIds);
 
-      const manifestMap = toolsEngine.getEnabledPluginManifests(pluginIds);
-      manifestMap.forEach((manifest, id) => {
-        toolManifestMap[id] = manifest;
-      });
+      // Build manifest map from actually enabled manifests only.
+      // This prevents disabled/default-only tools from leaking into runtime prompt injection.
+      for (const manifest of toolsResult.enabledManifests) {
+        toolManifestMap[manifest.identifier] = manifest;
+      }
 
       for (const manifest of lobehubSkillManifests) {
         toolSourceMap[manifest.identifier] = 'lobehubSkill';

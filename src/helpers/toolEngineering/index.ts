@@ -87,6 +87,7 @@ export const createAgentToolsEngine = (
   const searchConfig = getSearchConfig(workingModel.model, workingModel.provider);
   const agentState = getAgentStoreState();
   const userPlugins = agentSelectors.currentAgentPlugins(agentState);
+  const hasConfiguredTools = (pluginIds?.length ?? 0) > 0 || userPlugins.length > 0;
 
   return createToolsEngine({
     defaultToolIds,
@@ -112,8 +113,8 @@ export const createAgentToolsEngine = (
         ...(pluginIds && Object.fromEntries(pluginIds.map((id) => [id, true]))),
         // User-selected plugins (from the active agent)
         ...Object.fromEntries(userPlugins.map((id) => [id, true])),
-        // Always-on builtin tools
-        ...Object.fromEntries(alwaysOnToolIds.map((id) => [id, true])),
+        // Keep discovery core tools available only when the agent actually has configured tools.
+        ...(hasConfiguredTools && Object.fromEntries(alwaysOnToolIds.map((id) => [id, true]))),
         // System-level rules (may override user selection for specific tools)
         [CloudSandboxManifest.identifier]:
           agentChatConfigSelectors.isCloudSandboxEnabled(agentState),

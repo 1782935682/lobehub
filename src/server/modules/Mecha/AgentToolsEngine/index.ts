@@ -104,6 +104,7 @@ export const createServerAgentToolsEngine = (
   } = params;
   const searchMode = agentConfig.chatConfig?.searchMode ?? 'auto';
   const isSearchEnabled = searchMode !== 'off';
+  const hasConfiguredTools = (agentConfig.plugins?.length ?? 0) > 0;
 
   // Determine runtime mode based on platform
   const isDesktopClient = !!deviceContext?.gatewayConfigured;
@@ -131,8 +132,8 @@ export const createServerAgentToolsEngine = (
       rules: {
         // User-selected plugins
         ...Object.fromEntries((agentConfig.plugins ?? []).map((id) => [id, true])),
-        // Always-on builtin tools
-        ...Object.fromEntries(alwaysOnToolIds.map((id) => [id, true])),
+        // Keep discovery core tools available only when the agent actually has configured tools.
+        ...(hasConfiguredTools && Object.fromEntries(alwaysOnToolIds.map((id) => [id, true]))),
         // System-level rules (may override user selection for specific tools)
         [CloudSandboxManifest.identifier]: runtimeMode === 'cloud',
         [KnowledgeBaseManifest.identifier]: hasEnabledKnowledgeBases,

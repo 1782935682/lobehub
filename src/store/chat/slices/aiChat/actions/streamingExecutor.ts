@@ -536,8 +536,14 @@ export class StreamingExecutorActionImpl {
       const currentDBMessages = this.#get().dbMessagesMap[messageKey] || [];
       // Use selectTodosFromMessages selector (shared with UI display)
       const todos = selectTodosFromMessages(currentDBMessages);
-      // Accumulate activated tool IDs from lobe-activator messages
-      const activatedToolIds = selectActivatedToolIdsFromMessages(currentDBMessages);
+      // Restore activated tools only from messages produced in the current operation.
+      // This prevents historical activations from old sessions from being blindly re-injected.
+      const currentRunStartIndex = currentDBMessages.findIndex((m) => m.id === parentMessageId);
+      const currentRunMessages =
+        currentRunStartIndex >= 0
+          ? currentDBMessages.slice(currentRunStartIndex + 1)
+          : currentDBMessages;
+      const activatedToolIds = selectActivatedToolIdsFromMessages(currentRunMessages);
       // Accumulate activated skills from activateSkill messages
       const activatedSkills = selectActivatedSkillsFromMessages(currentDBMessages);
       const hasQueuedMessages = (this.#get().queuedMessages[contextKey]?.length ?? 0) > 0;
