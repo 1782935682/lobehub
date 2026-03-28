@@ -441,8 +441,9 @@ export class BotMessageRouter {
     // Register slash command handlers (native + text-based)
     this.registerCommands(bot, commands);
 
-    // Register onNewMessage handler based on platform config
-    const dmEnabled = info.settings?.dm?.enabled ?? false;
+    // Register onNewMessage handler based on platform config.
+    // WeChat has no native mention semantics, so direct messages must be enabled by default.
+    const dmEnabled = info.settings?.dm?.enabled ?? platform === 'wechat';
     if (dmEnabled) {
       bot.onNewMessage(/./, async (thread, message, context?: MessageContext) => {
         if (message.author.isBot === true) return;

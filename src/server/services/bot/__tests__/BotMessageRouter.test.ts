@@ -270,5 +270,24 @@ describe('BotMessageRouter', () => {
       // Called once for text-based slash commands only, no DM catch-all
       expect(mockOnNewMessage).toHaveBeenCalledTimes(1);
     });
+
+    it('should register DM onNewMessage for wechat by default', async () => {
+      mockFindEnabledByPlatform.mockResolvedValue([
+        makeProvider({
+          applicationId: 'wechat-app-123',
+          platform: 'wechat',
+          settings: {},
+        }),
+      ]);
+
+      const router = new BotMessageRouter();
+      const handler = router.getWebhookHandler('wechat', 'wechat-app-123');
+
+      const req = new Request('https://example.com/webhook', { body: '{}', method: 'POST' });
+      await handler(req);
+
+      // Called twice: once for text-based slash commands, once for DM catch-all
+      expect(mockOnNewMessage).toHaveBeenCalledTimes(2);
+    });
   });
 });
