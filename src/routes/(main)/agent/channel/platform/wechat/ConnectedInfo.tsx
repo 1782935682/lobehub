@@ -47,7 +47,12 @@ interface WechatConnectedInfoProps {
     applicationId: string;
     credentials: Record<string, string>;
   };
-  onQrAuthenticated?: (credentials: { botId: string; botToken: string; userId: string }) => void;
+  onQrAuthenticated?: (credentials: {
+    baseUrl?: string;
+    botId: string;
+    botToken: string;
+    userId: string;
+  }) => void;
 }
 
 const WechatConnectedInfo = memo<WechatConnectedInfoProps>(

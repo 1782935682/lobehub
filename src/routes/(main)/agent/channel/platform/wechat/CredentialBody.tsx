@@ -9,7 +9,7 @@ import QrCodeAuth from './QrCodeAuth';
 const CredentialBody = memo<PlatformCredentialBodyProps>(
   ({ currentConfig, hasConfig, onAuthenticated }) => {
     const handleQrAuthenticated = useCallback(
-      (creds: { botId: string; botToken: string; userId: string }) => {
+      (creds: { baseUrl?: string; botId: string; botToken: string; userId: string }) => {
         const botToken = creds.botToken?.trim();
         if (!creds.botId && !botToken) return;
 
@@ -19,6 +19,8 @@ const CredentialBody = memo<PlatformCredentialBodyProps>(
           credentials: {
             botId: creds.botId,
             botToken: creds.botToken,
+            // Persist region-specific API endpoint to avoid auth header loss on redirects
+            ...(creds.baseUrl ? { baseUrl: creds.baseUrl } : {}),
             userId: creds.userId,
           },
         });

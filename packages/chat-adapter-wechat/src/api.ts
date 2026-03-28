@@ -36,8 +36,10 @@ function randomUin(): string {
 }
 
 function buildHeaders(botToken: string): Record<string, string> {
+  const normalizedToken = botToken.trim().replace(/^Bearer\s+/i, '');
+
   return {
-    'Authorization': `Bearer ${botToken}`,
+    'Authorization': `Bearer ${normalizedToken}`,
     'AuthorizationType': 'ilink_bot_token',
     'Content-Type': 'application/json',
     'X-WECHAT-UIN': randomUin(),

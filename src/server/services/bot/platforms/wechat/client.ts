@@ -45,7 +45,7 @@ function extractChatId(platformThreadId: string): string {
 }
 
 function getWechatBotToken(credentials: Record<string, string>): string {
-  const botToken = credentials.botToken?.trim();
+  const botToken = credentials.botToken?.trim().replace(/^Bearer\s+/i, '');
 
   if (!botToken) {
     throw new Error('Bot Token is required');
@@ -56,6 +56,10 @@ function getWechatBotToken(credentials: Record<string, string>): string {
 
 function resolveWechatApplicationId(config: BotProviderConfig, botToken: string): string {
   return config.applicationId || config.credentials.botId || botToken.slice(0, 8);
+}
+
+function resolveWechatBaseUrl(credentials: Record<string, string>): string | undefined {
+  return credentials.baseUrl?.trim() || credentials.baseurl?.trim() || undefined;
 }
 
 class WechatGatewayClient implements PlatformClient {
@@ -75,9 +79,10 @@ class WechatGatewayClient implements PlatformClient {
     this.config = config;
     this.context = context;
     const botToken = getWechatBotToken(config.credentials);
+    const baseUrl = resolveWechatBaseUrl(config.credentials);
 
     this.applicationId = resolveWechatApplicationId(config, botToken);
-    this.api = new WechatApiClient(botToken, config.credentials.botId);
+    this.api = new WechatApiClient(botToken, config.credentials.botId, baseUrl);
   }
 
   // --- Lifecycle ---
@@ -317,6 +322,7 @@ class WechatGatewayClient implements PlatformClient {
   createAdapter(): Record<string, any> {
     return {
       wechat: createWechatAdapter({
+        baseUrl: resolveWechatBaseUrl(this.config.credentials),
         botId: this.config.credentials.botId,
         botToken: this.config.credentials.botToken,
       }),

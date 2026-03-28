@@ -13,7 +13,12 @@ const QR_POLL_INTERVAL_MS = 2000;
 interface QrCodeAuthProps {
   buttonLabel?: string;
   buttonType?: ButtonProps['type'];
-  onAuthenticated: (credentials: { botId: string; botToken: string; userId: string }) => void;
+  onAuthenticated: (credentials: {
+    baseUrl?: string;
+    botId: string;
+    botToken: string;
+    userId: string;
+  }) => void;
   showTips?: boolean;
 }
 
@@ -63,6 +68,7 @@ const QrCodeAuth = memo<QrCodeAuthProps>(
             if (res.status === 'confirmed' && res.bot_token) {
               stopPolling();
               onAuthenticated({
+                baseUrl: res.baseurl,
                 botId: res.ilink_bot_id || '',
                 botToken: res.bot_token,
                 userId: res.ilink_user_id || '',

@@ -1,4 +1,6 @@
 export interface WechatAdapterConfig {
+  /** API base URL returned by QR auth (region-specific endpoint) */
+  baseUrl?: string;
   /** Bot's iLink user ID (from QR login) */
   botId?: string;
   /** Bot token obtained from iLink QR code authentication */
