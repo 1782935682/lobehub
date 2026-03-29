@@ -172,4 +172,93 @@ describe('AgentBridgeService', () => {
       }),
     );
   });
+
+  it('surfaces finalState.error when completion has no assistant content', async () => {
+    mockIsQueueAgentRuntimeEnabled.mockReturnValue(false);
+
+    mockExecAgent.mockImplementation(async (params: any) => {
+      await params.stepCallbacks?.onComplete({
+        finalState: {
+          error: {
+            message: 'Request error: {"error":"unauthorized","error_description":"Missing bearer token"}',
+          },
+          messages: [],
+        },
+        reason: 'done',
+      });
+
+      return {
+        assistantMessageId: 'assistant-msg-1',
+        createdAt: new Date().toISOString(),
+        operationId: 'op-1',
+        success: true,
+        topicId: 'topic-1',
+      };
+    });
+
+    const progressEdit = vi.fn().mockResolvedValue(undefined);
+    const thread = {
+      ...createThread(),
+      post: vi.fn().mockResolvedValue({ edit: progressEdit, id: 'progress-msg-1' }),
+    } as any;
+
+    const service = new AgentBridgeService(FAKE_DB, USER_ID);
+    const message = createMessage();
+    const client = createClient();
+
+    await service.handleMention(thread, message, {
+      agentId: 'agent-1',
+      botContext: { applicationId: 'app-1', platform: 'wechat', platformThreadId: THREAD_ID } as any,
+      client,
+    });
+
+    const editedText = progressEdit.mock.calls.at(-1)?.[0] as string;
+    expect(editedText).toContain('Missing bearer token');
+    expect(editedText).not.toContain('Agent completed but no response content found');
+  });
+
+  it('sends only final reply for non-editable platforms in local mode', async () => {
+    mockIsQueueAgentRuntimeEnabled.mockReturnValue(false);
+    mockGetPlatform.mockImplementation((platform?: string) =>
+      platform === 'wechat'
+        ? { id: 'wechat', supportsMessageEdit: false }
+        : { id: 'discord', supportsMessageEdit: true },
+    );
+
+    mockExecAgent.mockImplementation(async (params: any) => {
+      await params.stepCallbacks?.onAfterStep({
+        content: 'thinking...',
+        shouldContinue: true,
+        stepType: 'call_llm',
+      });
+
+      await params.stepCallbacks?.onComplete({
+        finalState: {
+          messages: [{ content: 'final useful reply', role: 'assistant' }],
+        },
+        reason: 'done',
+      });
+
+      return {
+        assistantMessageId: 'assistant-msg-1',
+        createdAt: new Date().toISOString(),
+        operationId: 'op-1',
+        success: true,
+        topicId: 'topic-1',
+      };
+    });
+
+    const thread = createThread();
+    const service = new AgentBridgeService(FAKE_DB, USER_ID);
+    const message = createMessage();
+    const client = createClient();
+
+    await service.handleMention(thread, message, {
+      agentId: 'agent-1',
+      botContext: { applicationId: 'app-1', platform: 'wechat', platformThreadId: THREAD_ID } as any,
+      client,
+    });
+
+    expect(thread.post).toHaveBeenCalledTimes(1);
+  });
 });

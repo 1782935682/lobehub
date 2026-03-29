@@ -220,6 +220,12 @@ export class AgentBridgeService {
     this.userId = userId;
   }
 
+  private canEditBotMessage(platform?: string): boolean {
+    if (!platform) return true;
+    const platformDef = platformRegistry.getPlatform(platform);
+    return platformDef?.supportsMessageEdit !== false;
+  }
+
   private async interruptTrackedOperation(threadId: string, operationId: string): Promise<void> {
     const aiAgentService = new AiAgentService(this.db, this.userId);
     const result = await aiAgentService.interruptTask({ operationId });
@@ -492,11 +498,14 @@ export class AgentBridgeService {
 
     await thread.startTyping();
 
+    const canEdit = this.canEditBotMessage(botContext?.platform);
     let progressMessage: SentMessage | undefined;
-    try {
-      progressMessage = await thread.post(renderStart(userMessage.text, { timezone }));
-    } catch (error) {
-      log('executeWithCallback: failed to post initial placeholder message: %O', error);
+    if (canEdit) {
+      try {
+        progressMessage = await thread.post(renderStart(userMessage.text, { timezone }));
+      } catch (error) {
+        log('executeWithCallback: failed to post initial placeholder message: %O', error);
+      }
     }
 
     const files = this.extractFiles(userMessage);
