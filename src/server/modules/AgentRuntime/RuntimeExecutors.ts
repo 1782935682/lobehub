@@ -47,6 +47,7 @@ import {
 } from '@/server/services/toolExecution';
 
 import { classifyLLMError, type LLMErrorKind } from './llmErrorClassification';
+import { optimizeChatPayloadForToken } from './payloadOptimization';
 import { type IStreamEventManager } from './types';
 
 const log = debug('lobe-server:agent-runtime:streaming-executors');
@@ -349,9 +350,14 @@ export const createRuntimeExecutors = (
       // Process messages through serverMessagesEngine to inject system role, knowledge, etc.
       // Rebuild params from agentConfig at execution time (capabilities built dynamically)
       const agentConfig = ctx.agentConfig;
+      let canUseFunctionCall = true;
       let processedMessages;
       if (agentConfig) {
         const { LOBE_DEFAULT_MODEL_LIST } = await import('model-bank');
+        const modelInfo = LOBE_DEFAULT_MODEL_LIST.find(
+          (item) => item.id === model && item.providerId === provider,
+        );
+        canUseFunctionCall = modelInfo?.abilities?.functionCall ?? true;
 
         // Extract <refer_topic> tags from messages and fetch summaries.
         // Skip if messages already contain injected topic_reference_context
@@ -513,12 +519,22 @@ export const createRuntimeExecutors = (
           messages: llmPayload.messages as UIChatMessage[],
           model,
           provider,
-          systemRole: agentConfig.systemRole ?? undefined,
+          systemRole:
+            typeof agentConfig.systemRole === 'string' &&
+            agentConfig.systemRole.trim().length > 0 &&
+            !(llmPayload.messages as UIChatMessage[]).some((m) => m.role === 'system')
+              ? agentConfig.systemRole.trim()
+              : undefined,
           toolDiscoveryConfig,
-          toolsConfig: {
-            manifests: Object.values(resolved.manifestMap),
-            tools: resolved.enabledToolIds,
-          },
+          ...(canUseFunctionCall &&
+            resolved.enabledToolIds.length > 0 && {
+              toolsConfig: {
+                manifests: resolved.enabledToolIds
+                  .map((id) => resolved.manifestMap[id])
+                  .filter(Boolean),
+                tools: resolved.enabledToolIds,
+              },
+            }),
           userMemory: state.metadata?.userMemory,
 
           // Skills configuration for <available_skills> injection
@@ -560,8 +576,59 @@ export const createRuntimeExecutors = (
 
       // Construct ChatStreamPayload
       const stream = ctx.stream ?? true;
-      const chatPayload = { messages: processedMessages, model, stream, tools };
+      const optimizedPayload = optimizeChatPayloadForToken(
+        {
+          messages: processedMessages,
+          tools,
+        },
+        { canUseFunctionCall, model, provider },
+      );
 
+      const chatPayload = {
+        messages: optimizedPayload.messages,
+        model,
+        stream,
+        tools: optimizedPayload.tools,
+      };
+
+      log(
+        `${stagePrefix} calling model-runtime chat (model: %s, messages: %d, tools: %d)`,
+        model,
+        chatPayload.messages.length,
+        chatPayload.tools?.length ?? 0,
+      );
+      log(
+        `${stagePrefix} payload-metrics history=%d->%d totalChars=%d->%d estTokens=%d->%d systemChars=%d->%d assistantChars=%d->%d userChars=%d->%d toolMsgChars=%d->%d functionChars=%d->%d wrappers=%d->%d base64=%d->%d imageCount=%d->%d imageUrlChars=%d->%d tools=%d->%d toolsChars=%d->%d impact=%o`,
+        optimizedPayload.before.historyCount,
+        optimizedPayload.after.historyCount,
+        optimizedPayload.before.totalChars,
+        optimizedPayload.after.totalChars,
+        optimizedPayload.before.estimatedTokens,
+        optimizedPayload.after.estimatedTokens,
+        optimizedPayload.before.systemPromptLength,
+        optimizedPayload.after.systemPromptLength,
+        optimizedPayload.before.assistantChars,
+        optimizedPayload.after.assistantChars,
+        optimizedPayload.before.userChars,
+        optimizedPayload.after.userChars,
+        optimizedPayload.before.toolMessageChars,
+        optimizedPayload.after.toolMessageChars,
+        optimizedPayload.before.functionChars,
+        optimizedPayload.after.functionChars,
+        optimizedPayload.before.wrapperChars,
+        optimizedPayload.after.wrapperChars,
+        optimizedPayload.before.base64Chars,
+        optimizedPayload.after.base64Chars,
+        optimizedPayload.before.imageCount,
+        optimizedPayload.after.imageCount,
+        optimizedPayload.before.imageUrlChars,
+        optimizedPayload.after.imageUrlChars,
+        optimizedPayload.before.toolsCount,
+        optimizedPayload.after.toolsCount,
+        optimizedPayload.before.toolsChars,
+        optimizedPayload.after.toolsChars,
+        optimizedPayload.impact,
+      );
       // Buffer: accumulate text and reasoning, send every 50ms
       const BUFFER_INTERVAL = 50;
       let textBuffer = '';
