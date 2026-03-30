@@ -1,4 +1,8 @@
-import type { ChatCompletionTool, OpenAIChatMessage, UserMessageContentPart } from '@lobechat/model-runtime';
+import type {
+  ChatCompletionTool,
+  OpenAIChatMessage,
+  UserMessageContentPart,
+} from '@lobechat/model-runtime';
 import debug from 'debug';
 
 const log = debug('lobe-server:agent-runtime:payload-optimizer');
@@ -23,10 +27,10 @@ interface PayloadMetrics {
 
 interface PayloadOptimizationConfig {
   enable: boolean;
-  maxTools: number;
   maxAssistantMessageChars: number;
   maxHistoryMessages: number;
   maxSystemPromptChars: number;
+  maxTools: number;
   onDemandTools: boolean;
   skipDuplicateOldImages: boolean;
   slimSystemPrompt: boolean;
@@ -88,7 +92,7 @@ const WRAPPER_TAG_PATTERNS = [
   /<\/files_info>/gi,
   /<images>/gi,
   /<\/images>/gi,
-  /<image\s+[^>]*>/gi,
+  /<image\s[^>]*>/gi,
   /<available_skills>/gi,
   /<\/available_skills>/gi,
   /<topic_reference_context>/gi,
@@ -242,27 +246,24 @@ const trimTextMiddle = (text: string, maxChars: number, marker = '\n...[truncate
 const stripWrapperNoise = (text: string) => {
   let output = text;
 
-  output = output.replace(/<files_info>\s*<\/files_info>/gis, '');
-  output = output.replace(/<images>\s*<\/images>/gis, '');
-  output = output.replace(/<available_skills>\s*<\/available_skills>/gis, '');
-  output = output.replace(/<topic_reference_context>\s*<\/topic_reference_context>/gis, '');
-  output = output.replace(/(<!--\s*SYSTEM CONTEXT\s*-->\s*){2,}/gi, '<!-- SYSTEM CONTEXT -->\n');
-  output = output.replace(/(<files_info>\s*){2,}/gi, '<files_info>\n');
-  output = output.replace(/(<\/files_info>\s*){2,}/gi, '</files_info>\n');
-  output = output.replace(/(<images>\s*){2,}/gi, '<images>\n');
-  output = output.replace(/(<\/images>\s*){2,}/gi, '</images>\n');
-  output = output.replace(/(<available_skills>\s*){2,}/gi, '<available_skills>\n');
-  output = output.replace(/(<\/available_skills>\s*){2,}/gi, '</available_skills>\n');
-  output = output.replace(
-    /(<topic_reference_context>\s*){2,}/gi,
-    '<topic_reference_context>\n',
-  );
-  output = output.replace(
+  output = output.replaceAll(/<files_info>\s*<\/files_info>/gi, '');
+  output = output.replaceAll(/<images>\s*<\/images>/gi, '');
+  output = output.replaceAll(/<available_skills>\s*<\/available_skills>/gi, '');
+  output = output.replaceAll(/<topic_reference_context>\s*<\/topic_reference_context>/gi, '');
+  output = output.replaceAll(/(<!--\s*SYSTEM CONTEXT\s*-->\s*){2,}/gi, '<!-- SYSTEM CONTEXT -->\n');
+  output = output.replaceAll(/(<files_info>\s*){2,}/gi, '<files_info>\n');
+  output = output.replaceAll(/(<\/files_info>\s*){2,}/gi, '</files_info>\n');
+  output = output.replaceAll(/(<images>\s*){2,}/gi, '<images>\n');
+  output = output.replaceAll(/(<\/images>\s*){2,}/gi, '</images>\n');
+  output = output.replaceAll(/(<available_skills>\s*){2,}/gi, '<available_skills>\n');
+  output = output.replaceAll(/(<\/available_skills>\s*){2,}/gi, '</available_skills>\n');
+  output = output.replaceAll(/(<topic_reference_context>\s*){2,}/gi, '<topic_reference_context>\n');
+  output = output.replaceAll(
     /(<\/topic_reference_context>\s*){2,}/gi,
     '</topic_reference_context>\n',
   );
 
-  output = output.replace(/\n{3,}/g, '\n\n');
+  output = output.replaceAll(/\n{3,}/g, '\n\n');
   return output.trim();
 };
 
@@ -332,7 +333,11 @@ const trimHistory = (messages: OpenAIChatMessage[], maxHistoryMessages: number) 
 const dedupeOlderVisualMessages = (
   messages: OpenAIChatMessage[],
   trailingImageMessageCount: number,
-): { imageMessagesPrunedCount: number; imagePartsDroppedCount: number; messages: OpenAIChatMessage[] } => {
+): {
+  imageMessagesPrunedCount: number;
+  imagePartsDroppedCount: number;
+  messages: OpenAIChatMessage[];
+} => {
   const imageMessageIndexes = messages
     .map((message, index) => ({ index, message }))
     .filter(({ message }) => message.role === 'user' && hasVisualPart(message.content))
@@ -397,11 +402,7 @@ const mergeAndSlimSystemMessages = (
 
   const uniqueSystemTexts = [...new Set(systemTexts)];
   const merged = uniqueSystemTexts.join('\n\n');
-  const finalSystem = trimTextMiddle(
-    merged,
-    maxSystemPromptChars,
-    '\n...[system trimmed]...\n',
-  );
+  const finalSystem = trimTextMiddle(merged, maxSystemPromptChars, '\n...[system trimmed]...\n');
 
   return {
     messages: [{ content: finalSystem, role: 'system' as const }, ...otherMessages],
@@ -413,7 +414,11 @@ const mergeAndSlimSystemMessages = (
 
 const applyMessageLevelCleanup = (
   messages: OpenAIChatMessage[],
-): { base64SegmentsStripped: number; duplicateContextBlocksDropped: number; messages: OpenAIChatMessage[] } => {
+): {
+  base64SegmentsStripped: number;
+  duplicateContextBlocksDropped: number;
+  messages: OpenAIChatMessage[];
+} => {
   const blockSignaturesByTag = new Map<string, Set<string>>();
   const cleaned = [...messages];
   let base64SegmentsStripped = 0;
@@ -429,7 +434,7 @@ const applyMessageLevelCleanup = (
     let nextContent = message.content;
 
     if (!shouldKeepFullPayload) {
-      nextContent = nextContent.replace(BASE64_DATA_URI_REGEX, () => {
+      nextContent = nextContent.replaceAll(BASE64_DATA_URI_REGEX, () => {
         base64SegmentsStripped += 1;
         return '[omitted historical base64 payload]';
       });
@@ -440,7 +445,7 @@ const applyMessageLevelCleanup = (
       const seen = blockSignaturesByTag.get(tag) ?? new Set<string>();
 
       nextContent = nextContent.replace(regex, (block) => {
-        const signature = block.replace(/\s+/g, ' ').trim();
+        const signature = block.replaceAll(/\s+/g, ' ').trim();
         if (!shouldKeepFullPayload && seen.has(signature)) {
           duplicateContextBlocksDropped += 1;
           return '';
@@ -510,7 +515,10 @@ const selectToolsOnDemand = (
       ? latestUserMessage.content.toLowerCase()
       : Array.isArray(latestUserMessage?.content)
         ? latestUserMessage.content
-            .filter((part): part is Extract<UserMessageContentPart, { type: 'text' }> => part.type === 'text')
+            .filter(
+              (part): part is Extract<UserMessageContentPart, { type: 'text' }> =>
+                part.type === 'text',
+            )
             .map((part) => part.text)
             .join('\n')
             .toLowerCase()
@@ -606,10 +614,15 @@ export const optimizeChatPayloadForToken = (
     impact.imageMessagesPrunedCount = dedupedVisuals.imageMessagesPrunedCount;
     impact.imagePartsDroppedCount = dedupedVisuals.imagePartsDroppedCount;
     messages = dedupedVisuals.messages.map((message) => {
-      if (message.role !== 'user' || !Array.isArray(message.content) || hasVisualPart(message.content)) {
+      if (
+        message.role !== 'user' ||
+        !Array.isArray(message.content) ||
+        hasVisualPart(message.content)
+      ) {
         return message;
       }
-      if (message.content.length === 0) return { ...message, content: removeVisualParts(message.content) };
+      if (message.content.length === 0)
+        return { ...message, content: removeVisualParts(message.content) };
       return message;
     });
   }
