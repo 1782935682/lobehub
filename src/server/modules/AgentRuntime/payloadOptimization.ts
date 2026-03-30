@@ -45,6 +45,7 @@ interface PayloadOptimizationInput {
 
 interface PayloadOptimizationOptions {
   canUseFunctionCall?: boolean;
+  lightweightChatOnly?: boolean;
   model?: string;
   provider?: string;
 }
@@ -101,6 +102,8 @@ const WRAPPER_TAG_PATTERNS = [
 
 const CONTEXT_BLOCK_TAGS = ['available_skills', 'files_info', 'images', 'topic_reference_context'];
 const BASE64_DATA_URI_REGEX = /data:(?:image|video)\/[\w.+-]+;base64,[A-Za-z0-9+/=\s]{120,}/g;
+const LIGHTWEIGHT_SYSTEM_PROMPT =
+  "Answer the user directly. Use the user's current language. Keep responses concise.";
 
 const estimateTokens = (textLength: number) => Math.ceil(textLength / 4);
 
@@ -267,6 +270,19 @@ const stripWrapperNoise = (text: string) => {
   return output.trim();
 };
 
+const stripWrapperBlocksCompletely = (text: string) => {
+  let output = text;
+
+  for (const tag of CONTEXT_BLOCK_TAGS) {
+    const regex = new RegExp(`<${tag}>[\\s\\S]*?<\\/${tag}>`, 'gi');
+    output = output.replaceAll(regex, '');
+  }
+
+  output = output.replaceAll(/<!--\s*SYSTEM CONTEXT\s*-->/gi, '');
+  output = output.replaceAll(/<image\s[^>]*>/gi, '');
+  return stripWrapperNoise(output);
+};
+
 const hasVisualPart = (content: OpenAIChatMessage['content']) =>
   Array.isArray(content) &&
   content.some((part) => part.type === 'image_url' || part.type === 'video_url');
@@ -414,6 +430,7 @@ const mergeAndSlimSystemMessages = (
 
 const applyMessageLevelCleanup = (
   messages: OpenAIChatMessage[],
+  options?: { lightweightChatOnly?: boolean },
 ): {
   base64SegmentsStripped: number;
   duplicateContextBlocksDropped: number;
@@ -440,6 +457,20 @@ const applyMessageLevelCleanup = (
       });
     }
 
+    if (options?.lightweightChatOnly) {
+      for (const tag of CONTEXT_BLOCK_TAGS) {
+        const regex = new RegExp(`<${tag}>[\\s\\S]*?<\\/${tag}>`, 'gi');
+        const blockMatches = nextContent.match(regex);
+        if (blockMatches) {
+          duplicateContextBlocksDropped += blockMatches.length;
+          nextContent = nextContent.replaceAll(regex, '');
+        }
+      }
+
+      cleaned[index] = { ...message, content: stripWrapperBlocksCompletely(nextContent) };
+      continue;
+    }
+
     for (const tag of CONTEXT_BLOCK_TAGS) {
       const regex = new RegExp(`<${tag}>[\\s\\S]*?<\\/${tag}>`, 'gi');
       const seen = blockSignaturesByTag.get(tag) ?? new Set<string>();
@@ -462,6 +493,11 @@ const applyMessageLevelCleanup = (
   }
 
   return { base64SegmentsStripped, duplicateContextBlocksDropped, messages: cleaned };
+};
+
+const applyLightweightSystemPrompt = (messages: OpenAIChatMessage[]) => {
+  const nonSystemMessages = messages.filter((message) => message.role !== 'system');
+  return [{ content: LIGHTWEIGHT_SYSTEM_PROMPT, role: 'system' as const }, ...nonSystemMessages];
 };
 
 const truncateAssistantMessages = (
@@ -544,7 +580,25 @@ export const optimizeChatPayloadForToken = (
   options?: PayloadOptimizationOptions,
   configOverrides?: Partial<PayloadOptimizationConfig>,
 ): PayloadOptimizationResult => {
-  const config = normalizeConfig(configOverrides);
+  const lightweightChatOnly = !!options?.lightweightChatOnly;
+  const config = normalizeConfig(
+    lightweightChatOnly
+      ? {
+          maxAssistantMessageChars: Number(process.env.LLM_LIGHTWEIGHT_MAX_ASSISTANT_CHARS || 1200),
+          maxHistoryMessages: Number(process.env.LLM_LIGHTWEIGHT_MAX_HISTORY_MESSAGES || 8),
+          maxSystemPromptChars: Number(process.env.LLM_LIGHTWEIGHT_MAX_SYSTEM_CHARS || 280),
+          maxTools: 1,
+          onDemandTools: false,
+          skipDuplicateOldImages: true,
+          slimSystemPrompt: true,
+          stripWrapperNoise: true,
+          trailingImageMessageCount: Number(
+            process.env.LLM_LIGHTWEIGHT_TRAILING_IMAGE_MESSAGES || 1,
+          ),
+          ...configOverrides,
+        }
+      : configOverrides,
+  );
   const before = summarizeMetrics(input.messages, input.tools);
   const impact: PayloadOptimizationImpact = {
     assistantTrimmedChars: 0,
@@ -577,6 +631,11 @@ export const optimizeChatPayloadForToken = (
   impact.historyDroppedToolMessages = historyTrimmed.historyDroppedToolMessages;
   let messages = historyTrimmed.messages;
 
+  if (lightweightChatOnly) {
+    // Lightweight chat mode forces a minimal system prompt to avoid large injected instruction blocks.
+    messages = applyLightweightSystemPrompt(messages);
+  }
+
   if (config.slimSystemPrompt) {
     const systemMerged = mergeAndSlimSystemMessages(messages, config.maxSystemPromptChars);
     messages = systemMerged.messages;
@@ -599,7 +658,7 @@ export const optimizeChatPayloadForToken = (
     });
   }
 
-  const cleaned = applyMessageLevelCleanup(messages);
+  const cleaned = applyMessageLevelCleanup(messages, { lightweightChatOnly });
   impact.base64SegmentsStripped = cleaned.base64SegmentsStripped;
   impact.duplicateContextBlocksDropped = cleaned.duplicateContextBlocksDropped;
   messages = cleaned.messages;
@@ -631,7 +690,11 @@ export const optimizeChatPayloadForToken = (
   impact.toolsNameDedupedCount = dedupedTools.toolsNameDedupedCount;
   let tools = dedupedTools.tools;
 
-  if (config.onDemandTools) {
+  if (lightweightChatOnly) {
+    // Lightweight chat mode disables all tools/function declarations to keep payload purely conversational.
+    impact.toolsDroppedCount += tools?.length ?? 0;
+    tools = undefined;
+  } else if (config.onDemandTools) {
     const onDemandResult = selectToolsOnDemand(tools, messages, config.maxTools);
     impact.toolsDroppedCount += onDemandResult.toolsDroppedCount;
     tools = onDemandResult.tools;

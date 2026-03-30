@@ -301,6 +301,7 @@ export const createRuntimeExecutors = (
     const operationLogId = `${operationId}:${stepIndex}`;
 
     const stagePrefix = `[${operationLogId}][call_llm]`;
+    const lightweightChatOnly = process.env.SIMPLE_CHAT_ONLY === 'true';
 
     log(`${stagePrefix} Starting operation`);
 
@@ -352,7 +353,9 @@ export const createRuntimeExecutors = (
       const agentConfig = ctx.agentConfig;
       let canUseFunctionCall = true;
       let processedMessages;
-      if (agentConfig) {
+      let injectedSystemRole = false;
+      let injectedToolsConfig = false;
+      if (agentConfig && !lightweightChatOnly) {
         const { LOBE_DEFAULT_MODEL_LIST } = await import('model-bank');
         const modelInfo = LOBE_DEFAULT_MODEL_LIST.find(
           (item) => item.id === model && item.providerId === provider,
@@ -546,6 +549,8 @@ export const createRuntimeExecutors = (
           ...(topicReferences && { topicReferences }),
           ...(onboardingContext && { onboardingContext }),
         };
+        injectedSystemRole = !!contextEngineInput.systemRole;
+        injectedToolsConfig = !!contextEngineInput.toolsConfig;
 
         processedMessages = await serverMessagesEngine(contextEngineInput);
 
@@ -568,7 +573,10 @@ export const createRuntimeExecutors = (
           type: 'context_engine_result',
         } as any);
       } else {
+        // In SIMPLE_CHAT_ONLY mode, bypass context-engine injections (skills/tools/web-browsing wrappers)
+        // and keep only direct chat messages before payload-level lightweight trimming.
         processedMessages = llmPayload.messages;
+        canUseFunctionCall = !lightweightChatOnly;
       }
 
       // Initialize ModelRuntime (read user's keyVaults from database)
@@ -579,9 +587,9 @@ export const createRuntimeExecutors = (
       const optimizedPayload = optimizeChatPayloadForToken(
         {
           messages: processedMessages,
-          tools,
+          tools: lightweightChatOnly ? undefined : tools,
         },
-        { canUseFunctionCall, model, provider },
+        { canUseFunctionCall, lightweightChatOnly, model, provider },
       );
 
       const chatPayload = {
@@ -596,6 +604,15 @@ export const createRuntimeExecutors = (
         model,
         chatPayload.messages.length,
         chatPayload.tools?.length ?? 0,
+      );
+      log(
+        `${stagePrefix} mode lightweightChatOnly=%s injectedSystem=%s injectedToolsConfig=%s injectedFunctionDeclarations=%s historyCount=%d imageCount=%d`,
+        lightweightChatOnly,
+        injectedSystemRole,
+        injectedToolsConfig,
+        (chatPayload.tools?.length ?? 0) > 0,
+        chatPayload.messages.length,
+        optimizedPayload.after.imageCount,
       );
       log(
         `${stagePrefix} payload-metrics history=%d->%d totalChars=%d->%d estTokens=%d->%d systemChars=%d->%d assistantChars=%d->%d userChars=%d->%d toolMsgChars=%d->%d functionChars=%d->%d wrappers=%d->%d base64=%d->%d imageCount=%d->%d imageUrlChars=%d->%d tools=%d->%d toolsChars=%d->%d impact=%o`,

@@ -153,9 +153,9 @@ describe('optimizeChatPayloadForToken', () => {
 
     expect(typeof result.messages[0].content).toBe('string');
     expect((result.messages[0].content as string).includes('<files_info>')).toBe(false);
-    expect((result.messages[0].content as string).includes('[omitted historical base64 payload]')).toBe(
-      true,
-    );
+    expect(
+      (result.messages[0].content as string).includes('[omitted historical base64 payload]'),
+    ).toBe(true);
     expect(result.impact.duplicateContextBlocksDropped).toBeGreaterThan(0);
     expect(result.impact.base64SegmentsStripped).toBeGreaterThan(0);
   });
@@ -187,5 +187,47 @@ describe('optimizeChatPayloadForToken', () => {
     expect(result.messages[0].content).toEqual([{ text: 'old image text', type: 'text' }]);
     expect(result.after.imageCount).toBe(1);
     expect(result.impact.imagePartsDroppedCount).toBe(1);
+  });
+
+  it('should enforce lightweight chat mode with minimal system and no tools', () => {
+    const messages: OpenAIChatMessage[] = [
+      { content: 'legacy system instruction', role: 'system' },
+      ...Array.from({ length: 12 }).flatMap((_, index) => [
+        { content: `u-${index}`, role: 'user' as const },
+        { content: `a-${index}-${'z'.repeat(1000)}`, role: 'assistant' as const },
+      ]),
+    ];
+    const tools = [buildTool('search')];
+
+    const result = optimizeChatPayloadForToken(
+      { messages, tools },
+      { lightweightChatOnly: true, model: 'gpt-4o', provider: 'openai' },
+    );
+
+    expect(result.tools).toBeUndefined();
+    expect(result.messages[0].role).toBe('system');
+    expect(result.messages[0].content).toContain("Use the user's current language");
+    expect(result.messages.length).toBeLessThanOrEqual(9);
+    expect(result.impact.toolsDroppedCount).toBeGreaterThan(0);
+  });
+
+  it('should strip wrapper blocks in lightweight chat mode', () => {
+    const messages: OpenAIChatMessage[] = [
+      {
+        content:
+          '<!-- SYSTEM CONTEXT -->\n<files_info>\nA\n</files_info>\n<available_skills>\nB\n</available_skills>\nhello',
+        role: 'user',
+      },
+    ];
+
+    const result = optimizeChatPayloadForToken(
+      { messages },
+      { lightweightChatOnly: true, model: 'gpt-4o', provider: 'openai' },
+    );
+
+    expect(typeof result.messages[1].content).toBe('string');
+    expect((result.messages[1].content as string).includes('<files_info>')).toBe(false);
+    expect((result.messages[1].content as string).includes('<available_skills>')).toBe(false);
+    expect((result.messages[1].content as string).includes('SYSTEM CONTEXT')).toBe(false);
   });
 });
