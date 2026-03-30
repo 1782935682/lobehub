@@ -43,6 +43,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  delete process.env.SIMPLE_CHAT_ONLY;
 });
 
 describe('POST handler', () => {
@@ -141,6 +142,54 @@ describe('POST handler', () => {
         },
         errorType: 500,
       });
+    });
+
+    it('should apply SIMPLE_CHAT_ONLY optimization in main chat route', async () => {
+      process.env.SIMPLE_CHAT_ONLY = 'true';
+
+      vi.mocked(getXorPayload).mockReturnValueOnce({
+        apiKey: 'test-api-key',
+        azureApiVersion: 'v1',
+        userId: 'abc',
+      });
+
+      const mockParams = Promise.resolve({ provider: 'test-provider' });
+      const mockChatPayload = {
+        messages: [
+          {
+            content:
+              '<!-- SYSTEM CONTEXT -->\n<files_info>\nA\n</files_info>\n' +
+              'user question'.repeat(20),
+            role: 'user' as const,
+          },
+        ],
+        model: 'test-model',
+        tools: [{ function: { name: 'search', parameters: { type: 'object' } }, type: 'function' }],
+      };
+
+      request = new Request(new URL('https://test.com'), {
+        body: JSON.stringify(mockChatPayload),
+        headers: { [LOBE_CHAT_AUTH_HEADER]: 'Bearer some-valid-token' },
+        method: 'POST',
+      });
+
+      const mockRuntime: LobeRuntimeAI = {
+        baseURL: 'abc',
+        chat: vi.fn().mockResolvedValue({ success: true }),
+      };
+      vi.mocked(initModelRuntimeFromDB).mockResolvedValue(new ModelRuntime(mockRuntime));
+
+      await POST(request as unknown as Request, { params: mockParams });
+
+      const calledPayload = vi.mocked(mockRuntime.chat).mock.calls[0]?.[0] as {
+        messages: Array<{ content: string; role: string }>;
+        tools?: unknown;
+      };
+
+      expect(calledPayload.tools).toBeUndefined();
+      expect(calledPayload.messages[0].role).toBe('system');
+      expect(calledPayload.messages[0].content).toContain("Use the user's current language");
+      expect(calledPayload.messages.at(-1)?.content.includes('<files_info>')).toBe(false);
     });
   });
 });

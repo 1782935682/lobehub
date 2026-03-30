@@ -184,3 +184,56 @@ Introduce a single global switch to force pure-chat lightweight payload mode and
   - `src/server/modules/AgentRuntime/RuntimeExecutors.ts`
   - `src/server/modules/AgentRuntime/payloadOptimization.ts`
   - `src/server/modules/AgentRuntime/__tests__/payloadOptimization.test.ts`
+
+---
+
+## 2026-03-30 - Wire SIMPLE_CHAT_ONLY Into Main Chat Route
+
+### Purpose
+
+Make `SIMPLE_CHAT_ONLY` effective for the normal chat main path (`webapi/chat/[provider]`) instead of only AgentRuntime path.
+
+### Modified Files
+
+- `src/app/(backend)/webapi/chat/[provider]/route.ts`
+- `src/app/(backend)/webapi/chat/[provider]/route.test.ts`
+
+### Concrete Changes
+
+- Added lightweight mode branch in main chat route:
+  - reads `SIMPLE_CHAT_ONLY === 'true'`;
+  - when enabled and `messages` is an array, runs `optimizeChatPayloadForToken(..., { lightweightChatOnly: true })`;
+  - forces `tools: undefined` before `modelRuntime.chat`.
+- Added debug log for main chat route lightweight mode:
+  - mode flag,
+  - whether system message exists,
+  - tools count,
+  - history count,
+  - image count,
+  - token estimate before/after optimization.
+- Added route unit test to verify:
+  - tools removed,
+  - minimal system prompt inserted,
+  - wrapper block (`<files_info>`) removed from user content.
+
+### New Switches
+
+- None (reused existing `SIMPLE_CHAT_ONLY`).
+
+### Existing Switch Changes
+
+- `SIMPLE_CHAT_ONLY`
+  - Before: effective mainly on AgentRuntime request path.
+  - After: effective on both AgentRuntime and main chat route (`webapi/chat/[provider]`).
+
+### Risks
+
+- Main chat route in lightweight mode may produce shorter-context answers due to aggressive slimming.
+- Any flow expecting tools in this route will no longer receive them when switch is enabled.
+
+### Rollback
+
+- Runtime rollback: set `SIMPLE_CHAT_ONLY=false`.
+- Code rollback: revert
+  - `src/app/(backend)/webapi/chat/[provider]/route.ts`
+  - `src/app/(backend)/webapi/chat/[provider]/route.test.ts`
