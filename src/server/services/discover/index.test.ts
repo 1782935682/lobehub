@@ -553,6 +553,21 @@ describe('DiscoverService', () => {
           expect.any(Object),
         );
       });
+
+      it('should return empty list when market SDK throws', async () => {
+        mockMarket.plugins.getPluginList.mockRejectedValueOnce(new Error('market unavailable'));
+
+        const result = await service.getMcpList({ page: 2, pageSize: 21 });
+
+        expect(result).toEqual({
+          categories: [],
+          currentPage: 2,
+          items: [],
+          pageSize: 21,
+          totalCount: 0,
+          totalPages: 0,
+        });
+      });
     });
 
     describe('getMcpDetail', () => {

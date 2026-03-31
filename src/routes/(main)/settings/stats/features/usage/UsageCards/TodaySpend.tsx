@@ -20,8 +20,10 @@ const computeSpend = (
 } => {
   if (!data || data?.length === 0) return { today: 0, yesterday: 0 };
 
-  const today = data.find((log) => dayjs.utc(log.day).isToday())?.totalSpend ?? 0;
-  const yesterday = data.find((log) => dayjs.utc(log.day).isYesterday())?.totalSpend ?? 0;
+  const todayKey = dayjs().format('YYYY-MM-DD');
+  const yesterdayKey = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+  const today = data.find((log) => log.day === todayKey)?.totalSpend ?? 0;
+  const yesterday = data.find((log) => log.day === yesterdayKey)?.totalSpend ?? 0;
 
   return {
     today: formatNumber(today),

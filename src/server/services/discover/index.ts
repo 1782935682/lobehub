@@ -835,28 +835,40 @@ export class DiscoverService {
 
   getMcpList = async (params: McpQueryParams = {}): Promise<McpListResponse> => {
     log('getMcpList: params=%O', params);
-    const { category, locale, sort } = params;
+    const { category, locale, sort, page = 1, pageSize = 20 } = params;
     const normalizedLocale = normalizeLocale(locale);
     const shouldOmitCategory = [McpCategory.All, McpCategory.Discover].includes(
       category as McpCategory,
     );
 
-    const result = await this.market.plugins.getPluginList(
-      {
-        ...params,
-        category: shouldOmitCategory ? undefined : category,
-        locale: normalizedLocale,
-        sort: shouldOmitCategory ? McpSorts.Recommended : sort,
-      },
-      {
-        next: {
-          revalidate: CacheRevalidate.List,
-          tags: [CacheTag.Discover, CacheTag.MCP],
+    try {
+      const result = await this.market.plugins.getPluginList(
+        {
+          ...params,
+          category: shouldOmitCategory ? undefined : category,
+          locale: normalizedLocale,
+          sort: shouldOmitCategory ? McpSorts.Recommended : sort,
         },
-      },
-    );
-    log('getMcpList: returning %d items on page %d', result.items.length, result.currentPage);
-    return result;
+        {
+          next: {
+            revalidate: CacheRevalidate.List,
+            tags: [CacheTag.Discover, CacheTag.MCP],
+          },
+        },
+      );
+      log('getMcpList: returning %d items on page %d', result.items.length, result.currentPage);
+      return result;
+    } catch (error) {
+      log('getMcpList: error fetching from market SDK: %O', error);
+      return {
+        categories: [],
+        currentPage: page,
+        items: [],
+        pageSize,
+        totalCount: 0,
+        totalPages: 0,
+      };
+    }
   };
 
   getMcpManifest = async (params: { identifier: string; locale?: string; version?: string }) => {
