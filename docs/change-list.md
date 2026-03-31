@@ -237,3 +237,43 @@ Make `SIMPLE_CHAT_ONLY` effective for the normal chat main path (`webapi/chat/[p
 - Code rollback: revert
   - `src/app/(backend)/webapi/chat/[provider]/route.ts`
   - `src/app/(backend)/webapi/chat/[provider]/route.test.ts`
+
+---
+
+## 2026-03-31 - MCP Market Fallback and Today Spend Date Matching Fix
+
+### Purpose
+
+Fix two user-visible issues:
+
+- MCP market list request failure caused blank/skeleton-only list.
+- "Today Spend" card showed `0` due to date matching mismatch.
+
+### Modified Files
+
+- `src/server/services/discover/index.ts`
+- `src/server/services/discover/index.test.ts`
+- `src/routes/(main)/settings/stats/features/usage/UsageCards/TodaySpend.tsx`
+
+### Concrete Changes
+
+- MCP market list fallback:
+  - wrapped `getMcpList` market SDK call in `try/catch`;
+  - when upstream throws, return a valid empty paginated response instead of propagating server error.
+- Added test for MCP fallback path:
+  - verifies empty response structure (`items: []`, `categories: []`, pagination fields kept) when SDK throws.
+- Today spend date matching:
+  - replaced `dayjs.utc(log.day).isToday()/isYesterday()` with direct `YYYY-MM-DD` key comparison using local day keys;
+  - avoids timezone-shift mismatch where current-day records are not matched.
+
+### Risks
+
+- MCP failure now degrades to empty data; root-cause logs are still required to diagnose upstream availability/auth issues.
+- Date comparison now follows local calendar day semantics (expected for UI cards), not UTC day boundaries.
+
+### Rollback
+
+- Revert files:
+  - `src/server/services/discover/index.ts`
+  - `src/server/services/discover/index.test.ts`
+  - `src/routes/(main)/settings/stats/features/usage/UsageCards/TodaySpend.tsx`
