@@ -222,7 +222,7 @@ describe('UsageRecordService', () => {
 
       // Should have entries for every day in the month
       const daysInMonth = dayjs().endOf('month').date();
-      expect(result.length).toBeGreaterThanOrEqual(daysInMonth - 1);
+      expect(result.length).toBe(daysInMonth);
 
       // Check that padded days have zero values
       const paddedDay = result.find((log) => log.totalRequests === 0);

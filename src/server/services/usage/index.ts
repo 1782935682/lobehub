@@ -138,7 +138,11 @@ export class UsageRecordService {
       'to',
       endDate.format('YYYY-MM-DD'),
     );
-    for (let date = startDate; date.isBefore(endDate); date = date.add(1, 'day')) {
+    for (
+      let date = startDate;
+      date.isBefore(endDate) || date.isSame(endDate, 'day');
+      date = date.add(1, 'day')
+    ) {
       const found = usageLogs.find((l) => l.day === date.format('YYYY-MM-DD'));
       if (found) {
         paddedUsageLogs.push(found);
