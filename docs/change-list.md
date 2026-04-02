@@ -277,3 +277,69 @@ Fix two user-visible issues:
   - `src/server/services/discover/index.ts`
   - `src/server/services/discover/index.test.ts`
   - `src/routes/(main)/settings/stats/features/usage/UsageCards/TodaySpend.tsx`
+
+---
+
+## 2026-04-02 - Tool Injection Scope Tightening and Bot/Usage Stability Sync
+
+### Purpose
+
+Sync latest `canary` changes into local branch, and ensure merged bot/runtime behavior stays stable after conflict resolution.
+
+### Modified Files
+
+- `src/helpers/toolEngineering/index.ts`
+- `src/server/modules/Mecha/AgentToolsEngine/index.ts`
+- `src/server/services/aiAgent/index.ts`
+- `src/store/chat/slices/aiChat/actions/streamingExecutor.ts`
+- `src/server/services/bot/BotMessageRouter.ts`
+- `src/server/services/bot/AgentBridgeService.ts`
+- `src/server/services/bot/__tests__/AgentBridgeService.test.ts`
+- `src/server/services/bot/__tests__/BotMessageRouter.test.ts`
+- `src/server/services/bot/platforms/wechat/client.ts`
+- `packages/chat-adapter-wechat/src/adapter.ts`
+- `packages/chat-adapter-wechat/src/api.ts`
+- `packages/chat-adapter-wechat/src/types.ts`
+- `src/routes/(main)/agent/channel/platform/wechat/ConnectedInfo.tsx`
+- `src/routes/(main)/agent/channel/platform/wechat/CredentialBody.tsx`
+- `src/routes/(main)/agent/channel/platform/wechat/QrCodeAuth.tsx`
+- `src/server/services/usage/index.ts`
+- `src/server/services/usage/index.test.ts`
+
+### Concrete Changes
+
+- Tool manifest injection scope tightened:
+  - runtime prompt injection now builds `toolManifestMap` from `toolsResult.enabledManifests` only;
+  - avoids disabled/default-only tools leaking into operation prompt context.
+- Agent topic validity guard:
+  - when incoming `topicId` does not belong to current agent/user context, fallback to new topic creation.
+- WeChat bot robustness updates:
+  - enable DM routing by default;
+  - normalize bot token auth handling and persist `baseUrl` across adapter/client path;
+  - harden stale `topic_id` FK recovery path and reduce duplicate reply/progress behavior on non-editable platforms.
+- Usage daily padding fix:
+  - include month-end boundary day in daily usage fill logic to avoid last-day data gaps.
+- Post-merge local regression fix (during this rebase verification):
+  - in in-memory bot completion callback, when `finalState.error` exists but no assistant content, now edits/posts explicit error message before reject.
+
+### New Switches
+
+- None.
+
+### Existing Switch Changes
+
+- None.
+
+### Risks
+
+- Enabled-manifest-only injection may reduce tool visibility for flows that implicitly depended on non-enabled manifests.
+- WeChat message-edit capability branching now differs by platform metadata; if platform capability config is wrong, progress display style may differ from expectation.
+- Topic validity fallback creates a new topic when mismatch detected, which changes previous "force reuse topicId" behavior.
+
+### Rollback
+
+- Revert corresponding commits/files above to restore previous behavior.
+- For fast isolation, rollback in this order:
+  - bot behavior files (`AgentBridgeService.ts`, `BotMessageRouter.ts`, WeChat adapter/client files);
+  - tool injection files (`aiAgent/index.ts`, `AgentToolsEngine/index.ts`, `toolEngineering/index.ts`);
+  - usage padding files (`usage/index.ts`, `usage/index.test.ts`).

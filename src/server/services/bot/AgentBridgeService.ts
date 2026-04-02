@@ -910,6 +910,24 @@ export class AgentBridgeService {
                     return;
                   }
 
+                  const finalStateError = (event as { finalState?: { error?: unknown } }).finalState
+                    ?.error;
+                  if (finalStateError) {
+                    const errorMsg = extractErrorMessage(finalStateError);
+                    try {
+                      const errorText = renderError(errorMsg);
+                      if (progressMessage) {
+                        await progressMessage.edit(errorText);
+                      } else {
+                        await thread.post(errorText);
+                      }
+                    } catch {
+                      // ignore send failure
+                    }
+                    reject(new Error(errorMsg));
+                    return;
+                  }
+
                   reject(new Error('Agent completed but no response content found'));
                 } catch (error) {
                   reject(error);
