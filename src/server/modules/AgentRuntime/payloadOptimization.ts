@@ -30,10 +30,13 @@ interface PayloadOptimizationConfig {
   maxAssistantMessageChars: number;
   maxHistoryMessages: number;
   maxSystemPromptChars: number;
+  maxToolDescriptionChars: number;
+  maxToolSchemaDescriptionChars: number;
   maxTools: number;
   onDemandTools: boolean;
   skipDuplicateOldImages: boolean;
   slimSystemPrompt: boolean;
+  stripToolSchemaNoise: boolean;
   stripWrapperNoise: boolean;
   trailingImageMessageCount: number;
 }
@@ -67,9 +70,14 @@ interface PayloadOptimizationImpact {
   historyDroppedToolMessages: number;
   imageMessagesPrunedCount: number;
   imagePartsDroppedCount: number;
+  lightweightAssistantToolCallMessagesDroppedCount: number;
+  lightweightToolMessagesDroppedCount: number;
   systemDroppedDuplicateCount: number;
   systemMergedCount: number;
   systemTrimmedChars: number;
+  toolDescriptionTrimmedChars: number;
+  toolSchemaDescriptionTrimmedChars: number;
+  toolSchemaFieldsDroppedCount: number;
   toolsDroppedCount: number;
   toolsNameDedupedCount: number;
 }
@@ -80,9 +88,14 @@ const DEFAULT_CONFIG: PayloadOptimizationConfig = {
   maxAssistantMessageChars: Number(process.env.LLM_PAYLOAD_MAX_ASSISTANT_CHARS || 6000),
   maxHistoryMessages: Number(process.env.LLM_PAYLOAD_MAX_HISTORY_MESSAGES || 24),
   maxSystemPromptChars: Number(process.env.LLM_PAYLOAD_MAX_SYSTEM_CHARS || 12000),
+  maxToolDescriptionChars: Number(process.env.LLM_PAYLOAD_MAX_TOOL_DESCRIPTION_CHARS || 400),
+  maxToolSchemaDescriptionChars: Number(
+    process.env.LLM_PAYLOAD_MAX_TOOL_SCHEMA_DESCRIPTION_CHARS || 160,
+  ),
   onDemandTools: process.env.LLM_PAYLOAD_ON_DEMAND_TOOLS !== '0',
   skipDuplicateOldImages: process.env.LLM_PAYLOAD_SKIP_OLD_IMAGES !== '0',
   slimSystemPrompt: process.env.LLM_PAYLOAD_SLIM_SYSTEM_PROMPT !== '0',
+  stripToolSchemaNoise: process.env.LLM_PAYLOAD_STRIP_TOOL_SCHEMA_NOISE !== '0',
   stripWrapperNoise: process.env.LLM_PAYLOAD_STRIP_WRAPPER_NOISE !== '0',
   trailingImageMessageCount: Number(process.env.LLM_PAYLOAD_TRAILING_IMAGE_MESSAGES || 2),
 };
@@ -104,6 +117,15 @@ const CONTEXT_BLOCK_TAGS = ['available_skills', 'files_info', 'images', 'topic_r
 const BASE64_DATA_URI_REGEX = /data:(?:image|video)\/[\w.+-]+;base64,[A-Za-z0-9+/=\s]{120,}/g;
 const LIGHTWEIGHT_SYSTEM_PROMPT =
   "Answer the user directly. Use the user's current language. Keep responses concise.";
+const TOOL_SCHEMA_NOISE_KEYS = new Set([
+  '$comment',
+  '$id',
+  '$schema',
+  'default',
+  'example',
+  'examples',
+  'title',
+]);
 
 const estimateTokens = (textLength: number) => Math.ceil(textLength / 4);
 
@@ -132,6 +154,14 @@ const normalizeConfig = (
     maxSystemPromptChars: clampPositiveInt(
       merged.maxSystemPromptChars,
       DEFAULT_CONFIG.maxSystemPromptChars,
+    ),
+    maxToolDescriptionChars: clampPositiveInt(
+      merged.maxToolDescriptionChars,
+      DEFAULT_CONFIG.maxToolDescriptionChars,
+    ),
+    maxToolSchemaDescriptionChars: clampPositiveInt(
+      merged.maxToolSchemaDescriptionChars,
+      DEFAULT_CONFIG.maxToolSchemaDescriptionChars,
     ),
     trailingImageMessageCount: clampPositiveInt(
       merged.trailingImageMessageCount,
@@ -319,6 +349,121 @@ const dedupeTools = (tools?: ChatCompletionTool[]) => {
   return { tools: result.length > 0 ? result : undefined, toolsNameDedupedCount };
 };
 
+const compactToolSchemaValue = (
+  value: unknown,
+  maxToolSchemaDescriptionChars: number,
+): {
+  toolSchemaDescriptionTrimmedChars: number;
+  toolSchemaFieldsDroppedCount: number;
+  value: unknown;
+} => {
+  if (Array.isArray(value)) {
+    let toolSchemaDescriptionTrimmedChars = 0;
+    let toolSchemaFieldsDroppedCount = 0;
+
+    const nextArray = value.map((item) => {
+      const compacted = compactToolSchemaValue(item, maxToolSchemaDescriptionChars);
+      toolSchemaDescriptionTrimmedChars += compacted.toolSchemaDescriptionTrimmedChars;
+      toolSchemaFieldsDroppedCount += compacted.toolSchemaFieldsDroppedCount;
+      return compacted.value;
+    });
+
+    return { toolSchemaDescriptionTrimmedChars, toolSchemaFieldsDroppedCount, value: nextArray };
+  }
+
+  if (!value || typeof value !== 'object') {
+    return { toolSchemaDescriptionTrimmedChars: 0, toolSchemaFieldsDroppedCount: 0, value };
+  }
+
+  let toolSchemaDescriptionTrimmedChars = 0;
+  let toolSchemaFieldsDroppedCount = 0;
+  const nextObject: Record<string, unknown> = {};
+
+  for (const [key, entryValue] of Object.entries(value)) {
+    if (TOOL_SCHEMA_NOISE_KEYS.has(key)) {
+      toolSchemaFieldsDroppedCount += 1;
+      continue;
+    }
+
+    if (key === 'description' && typeof entryValue === 'string') {
+      const nextDescription = trimTextMiddle(
+        entryValue,
+        maxToolSchemaDescriptionChars,
+        ' ... ',
+      ).trim();
+
+      toolSchemaDescriptionTrimmedChars += Math.max(0, entryValue.length - nextDescription.length);
+      nextObject[key] = nextDescription;
+      continue;
+    }
+
+    const compacted = compactToolSchemaValue(entryValue, maxToolSchemaDescriptionChars);
+    toolSchemaDescriptionTrimmedChars += compacted.toolSchemaDescriptionTrimmedChars;
+    toolSchemaFieldsDroppedCount += compacted.toolSchemaFieldsDroppedCount;
+    nextObject[key] = compacted.value;
+  }
+
+  return { toolSchemaDescriptionTrimmedChars, toolSchemaFieldsDroppedCount, value: nextObject };
+};
+
+const compactToolDefinitions = (
+  tools: ChatCompletionTool[] | undefined,
+  config: Pick<
+    PayloadOptimizationConfig,
+    'maxToolDescriptionChars' | 'maxToolSchemaDescriptionChars' | 'stripToolSchemaNoise'
+  >,
+) => {
+  if (!tools || tools.length === 0 || !config.stripToolSchemaNoise) {
+    return {
+      toolDescriptionTrimmedChars: 0,
+      toolSchemaDescriptionTrimmedChars: 0,
+      toolSchemaFieldsDroppedCount: 0,
+      tools,
+    };
+  }
+
+  let toolDescriptionTrimmedChars = 0;
+  let toolSchemaDescriptionTrimmedChars = 0;
+  let toolSchemaFieldsDroppedCount = 0;
+
+  const nextTools = tools.map((tool) => {
+    const nextTool = structuredClone(tool);
+    const description = nextTool.function?.description;
+
+    if (typeof description === 'string') {
+      const nextDescription = trimTextMiddle(
+        description,
+        config.maxToolDescriptionChars,
+        ' ... ',
+      ).trim();
+
+      toolDescriptionTrimmedChars += Math.max(0, description.length - nextDescription.length);
+      nextTool.function.description = nextDescription;
+    }
+
+    if (nextTool.function?.parameters) {
+      const compacted = compactToolSchemaValue(
+        nextTool.function.parameters,
+        config.maxToolSchemaDescriptionChars,
+      );
+      toolSchemaDescriptionTrimmedChars += compacted.toolSchemaDescriptionTrimmedChars;
+      toolSchemaFieldsDroppedCount += compacted.toolSchemaFieldsDroppedCount;
+      nextTool.function.parameters = compacted.value as NonNullable<
+        typeof nextTool.function
+      >['parameters'];
+    }
+
+    return nextTool;
+  });
+
+  return {
+    toolDescriptionTrimmedChars,
+    toolSchemaDescriptionTrimmedChars,
+    toolSchemaFieldsDroppedCount,
+    tools: nextTools,
+  };
+};
+
 const trimHistory = (messages: OpenAIChatMessage[], maxHistoryMessages: number) => {
   const systemMessages = messages.filter((m) => m.role === 'system');
   const nonSystemMessages = messages.filter((m) => m.role !== 'system');
@@ -500,6 +645,38 @@ const applyLightweightSystemPrompt = (messages: OpenAIChatMessage[]) => {
   return [{ content: LIGHTWEIGHT_SYSTEM_PROMPT, role: 'system' as const }, ...nonSystemMessages];
 };
 
+const stripLightweightToolHistory = (messages: OpenAIChatMessage[]) => {
+  let lightweightAssistantToolCallMessagesDroppedCount = 0;
+  let lightweightToolMessagesDroppedCount = 0;
+
+  const nextMessages = messages.filter((message) => {
+    if (message.role === 'tool' || message.role === 'function') {
+      lightweightToolMessagesDroppedCount += 1;
+      return false;
+    }
+
+    const hasOnlyToolCalls =
+      message.role === 'assistant' &&
+      !!message.tool_calls?.length &&
+      (message.content === '' ||
+        (Array.isArray(message.content) && message.content.length === 0) ||
+        message.content == null);
+
+    if (hasOnlyToolCalls) {
+      lightweightAssistantToolCallMessagesDroppedCount += 1;
+      return false;
+    }
+
+    return true;
+  });
+
+  return {
+    lightweightAssistantToolCallMessagesDroppedCount,
+    lightweightToolMessagesDroppedCount,
+    messages: nextMessages,
+  };
+};
+
 const truncateAssistantMessages = (
   messages: OpenAIChatMessage[],
   maxAssistantMessageChars: number,
@@ -609,9 +786,14 @@ export const optimizeChatPayloadForToken = (
     historyDroppedToolMessages: 0,
     imageMessagesPrunedCount: 0,
     imagePartsDroppedCount: 0,
+    lightweightAssistantToolCallMessagesDroppedCount: 0,
+    lightweightToolMessagesDroppedCount: 0,
     systemDroppedDuplicateCount: 0,
     systemMergedCount: 0,
     systemTrimmedChars: 0,
+    toolDescriptionTrimmedChars: 0,
+    toolSchemaDescriptionTrimmedChars: 0,
+    toolSchemaFieldsDroppedCount: 0,
     toolsDroppedCount: 0,
     toolsNameDedupedCount: 0,
   };
@@ -632,6 +814,13 @@ export const optimizeChatPayloadForToken = (
   let messages = historyTrimmed.messages;
 
   if (lightweightChatOnly) {
+    const strippedLightweightHistory = stripLightweightToolHistory(messages);
+    impact.lightweightAssistantToolCallMessagesDroppedCount =
+      strippedLightweightHistory.lightweightAssistantToolCallMessagesDroppedCount;
+    impact.lightweightToolMessagesDroppedCount =
+      strippedLightweightHistory.lightweightToolMessagesDroppedCount;
+    messages = strippedLightweightHistory.messages;
+
     // Lightweight chat mode forces a minimal system prompt to avoid large injected instruction blocks.
     messages = applyLightweightSystemPrompt(messages);
   }
@@ -688,7 +877,11 @@ export const optimizeChatPayloadForToken = (
 
   const dedupedTools = dedupeTools(input.tools);
   impact.toolsNameDedupedCount = dedupedTools.toolsNameDedupedCount;
-  let tools = dedupedTools.tools;
+  const compactedTools = compactToolDefinitions(dedupedTools.tools, config);
+  impact.toolDescriptionTrimmedChars = compactedTools.toolDescriptionTrimmedChars;
+  impact.toolSchemaDescriptionTrimmedChars = compactedTools.toolSchemaDescriptionTrimmedChars;
+  impact.toolSchemaFieldsDroppedCount = compactedTools.toolSchemaFieldsDroppedCount;
+  let tools = compactedTools.tools;
 
   if (lightweightChatOnly) {
     // Lightweight chat mode disables all tools/function declarations to keep payload purely conversational.

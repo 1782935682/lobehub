@@ -343,3 +343,83 @@ Sync latest `canary` changes into local branch, and ensure merged bot/runtime be
   - bot behavior files (`AgentBridgeService.ts`, `BotMessageRouter.ts`, WeChat adapter/client files);
   - tool injection files (`aiAgent/index.ts`, `AgentToolsEngine/index.ts`, `toolEngineering/index.ts`);
   - usage padding files (`usage/index.ts`, `usage/index.test.ts`).
+
+---
+
+## 2026-04-08 - Further Reduce Token Cost For Tool Schema And Lightweight Chat History
+
+### Purpose
+
+Reduce request token usage further in low-risk areas without changing normal chat/tool basic behavior:
+
+- strip verbose JSON Schema noise from tool declarations;
+- drop stale tool execution history when `SIMPLE_CHAT_ONLY` is enabled.
+
+### Modified Files
+
+- `src/server/modules/AgentRuntime/payloadOptimization.ts`
+- `src/server/modules/AgentRuntime/__tests__/payloadOptimization.test.ts`
+
+### Concrete Changes
+
+- Added tool schema compaction before final payload dispatch:
+  - trims long top-level tool descriptions;
+  - trims nested schema `description` fields;
+  - removes schema noise fields that do not affect tool invocation semantics:
+    - `$schema`
+    - `$id`
+    - `$comment`
+    - `title`
+    - `example`
+    - `examples`
+    - `default`
+- Added impact counters for schema compaction:
+  - `toolDescriptionTrimmedChars`
+  - `toolSchemaDescriptionTrimmedChars`
+  - `toolSchemaFieldsDroppedCount`
+- Strengthened `SIMPLE_CHAT_ONLY` handling:
+  - removes historical `tool` / `function` messages from payload;
+  - removes assistant messages that only contain tool calls and no user-visible text;
+  - keeps lightweight mode focused on direct conversational context only.
+- Added impact counters for lightweight history cleanup:
+  - `lightweightToolMessagesDroppedCount`
+  - `lightweightAssistantToolCallMessagesDroppedCount`
+- Added unit tests covering:
+  - tool schema compaction keeps semantic fields while reducing payload size;
+  - lightweight chat mode drops stale tool history cleanly.
+
+### New Switches
+
+- `LLM_PAYLOAD_MAX_TOOL_DESCRIPTION_CHARS`
+  - Default: `400`
+  - Behavior: maximum preserved length for top-level tool description text.
+  - Impact scope: tool declaration payload size in AgentRuntime and any shared optimizer call sites.
+- `LLM_PAYLOAD_MAX_TOOL_SCHEMA_DESCRIPTION_CHARS`
+  - Default: `160`
+  - Behavior: maximum preserved length for nested JSON Schema `description` fields.
+  - Impact scope: tool parameter schema token usage.
+- `LLM_PAYLOAD_STRIP_TOOL_SCHEMA_NOISE`
+  - Default: enabled (`!= '0'`)
+  - Behavior: removes non-semantic schema noise keys and trims verbose schema descriptions.
+  - Impact scope: tool/function declaration payload size.
+
+### Existing Switch Changes
+
+- `SIMPLE_CHAT_ONLY`
+  - Before: removed tools and wrapper/context blocks, but historical tool execution trace could still remain in messages.
+  - After: additionally removes stale `tool/function` messages and empty assistant tool-call shells from payload history.
+
+### Risks
+
+- Some providers or downstream adapters might have relied on decorative schema fields (`title`, `examples`) for better model hinting; removing them may slightly reduce tool-selection quality in edge cases.
+- In `SIMPLE_CHAT_ONLY` mode, follow-up questions that implicitly relied on previous raw tool result text now lose that tool history by design.
+
+### Rollback
+
+- Runtime rollback:
+  - set `LLM_PAYLOAD_STRIP_TOOL_SCHEMA_NOISE=0` to disable schema compaction;
+  - set `SIMPLE_CHAT_ONLY=false` to restore non-lightweight history behavior.
+- Code rollback:
+  - revert:
+    - `src/server/modules/AgentRuntime/payloadOptimization.ts`
+    - `src/server/modules/AgentRuntime/__tests__/payloadOptimization.test.ts`

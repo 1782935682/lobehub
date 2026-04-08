@@ -116,6 +116,54 @@ describe('optimizeChatPayloadForToken', () => {
     expect(disabled.tools).toBeUndefined();
   });
 
+  it('should compact verbose tool schema noise without dropping tool semantics', () => {
+    const tools: ChatCompletionTool[] = [
+      {
+        function: {
+          description: `search tool ${'x'.repeat(600)}`,
+          name: 'search',
+          parameters: {
+            $schema: 'https://json-schema.org/draft/2020-12/schema',
+            properties: {
+              q: {
+                description: `query ${'y'.repeat(300)}`,
+                examples: ['weather in shanghai'],
+                title: 'Query',
+                type: 'string',
+              },
+            },
+            required: ['q'],
+            title: 'SearchParams',
+            type: 'object',
+          },
+        },
+        type: 'function',
+      },
+    ];
+
+    const result = optimizeChatPayloadForToken(
+      { messages: [{ content: 'hi', role: 'user' }], tools },
+      {},
+    );
+    const schema = result.tools?.[0].function.parameters as {
+      properties: {
+        q: { description?: string; examples?: string[]; title?: string; type: string };
+      };
+      title?: string;
+      type: string;
+    };
+
+    expect(result.tools?.[0].function.description!.length).toBeLessThan(
+      tools[0].function.description!.length,
+    );
+    expect(schema.title).toBeUndefined();
+    expect(schema.properties.q.title).toBeUndefined();
+    expect(schema.properties.q.examples).toBeUndefined();
+    expect(schema.properties.q.type).toBe('string');
+    expect(result.impact.toolSchemaFieldsDroppedCount).toBeGreaterThan(0);
+    expect(result.after.toolsChars).toBeLessThan(result.before.toolsChars);
+  });
+
   it('should merge and trim duplicated system messages', () => {
     const messages: OpenAIChatMessage[] = [
       { content: 'You are helpful', role: 'system' },
@@ -229,5 +277,32 @@ describe('optimizeChatPayloadForToken', () => {
     expect((result.messages[1].content as string).includes('<files_info>')).toBe(false);
     expect((result.messages[1].content as string).includes('<available_skills>')).toBe(false);
     expect((result.messages[1].content as string).includes('SYSTEM CONTEXT')).toBe(false);
+  });
+
+  it('should drop stale tool history in lightweight chat mode', () => {
+    const messages: OpenAIChatMessage[] = [
+      { content: 'legacy system instruction', role: 'system' },
+      {
+        content: '',
+        role: 'assistant',
+        tool_calls: [{ function: { arguments: '{}', name: 'search' }, id: 'call_1', type: 'function' }],
+      },
+      { content: '{"result":"old"}', name: 'search', role: 'tool', tool_call_id: 'call_1' },
+      { content: 'follow-up question', role: 'user' },
+    ];
+
+    const result = optimizeChatPayloadForToken(
+      { messages, tools: [buildTool('search')] },
+      { lightweightChatOnly: true, model: 'gpt-4o', provider: 'openai' },
+    );
+
+    expect(result.messages.some((message) => message.role === 'tool')).toBe(false);
+    expect(
+      result.messages.some(
+        (message) => message.role === 'assistant' && !!message.tool_calls?.length,
+      ),
+    ).toBe(false);
+    expect(result.impact.lightweightToolMessagesDroppedCount).toBe(1);
+    expect(result.impact.lightweightAssistantToolCallMessagesDroppedCount).toBe(1);
   });
 });
