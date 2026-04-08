@@ -31,8 +31,8 @@ interface PayloadOptimizationConfig {
   maxHistoryMessages: number;
   maxSystemPromptChars: number;
   maxToolDescriptionChars: number;
-  maxToolSchemaDescriptionChars: number;
   maxTools: number;
+  maxToolSchemaDescriptionChars: number;
   onDemandTools: boolean;
   skipDuplicateOldImages: boolean;
   slimSystemPrompt: boolean;
